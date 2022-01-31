@@ -1,0 +1,347 @@
+mads 2.1.1
+Source: mount-and-boot.s
+     1 					;;
+     2 					;; mount-and-boot - Mount persisted drive slots
+     3 					;;                  and boot.
+     4 					;;
+     5 					;; Author: Thomas Cherryhomes
+     6 					;;   <thom.cherryhomes@gmail.com>
+     7 					;;
+     8
+     9 					;; Zero Page
+    10
+    11 = 0012			RTCLOK0	=	$12
+    12 = 0013			RTCLOK1 =	$13
+    13 = 0014			RTCLOK2 =	$14
+    14 					
+    15 = 0080			MSGL	= 	$80 		; MSG LO
+    16 = 0081			MSGH	= 	$81		; MSG HI
+    17 = 0082			SEL     =       $82		; Is select pressed? ($FF=yes)
+    18 = 0083			WFST    =       $83            	; WIFI Status (3=connected)
+    19 = 0084			WFTO	=	$84		; WIFI timeout counter (40 max)
+    20 = 02C6			COLOR2	=	$02C6		; Background color (Mode 2)
+    21 					
+    22 				       ; PAGE 3
+    23 				       ; DEVICE CONTROL BLOCK (DCB)
+    24
+    25 = 0300			DCB     =     $0300   ; BASE
+    26 = 0300			DDEVIC  =     DCB     ; DEVICE #
+    27 = 0301			DUNIT   =     DCB+1   ; UNIT #
+    28 = 0302			DCOMND  =     DCB+2   ; COMMAND
+    29 = 0303			DSTATS  =     DCB+3   ; STATUS/DIR
+    30 = 0304			DBUFL   =     DCB+4   ; BUF ADR L
+    31 = 0305			DBUFH   =     DCB+5   ; BUF ADR H
+    32 = 0306			DTIMLO  =     DCB+6   ; TIMEOUT (S)
+    33 = 0307			DRSVD   =     DCB+7   ; NOT USED
+    34 = 0308			DBYTL   =     DCB+8   ; BUF LEN L
+    35 = 0309			DBYTH   =     DCB+9   ; BUF LEN H
+    36 = 030A			DAUXL   =     DCB+10  ; AUX BYTE L
+    37 = 030B			DAUXH   =     DCB+11  ; AUX BYTE H
+    38
+    39 = 031A			HATABS  =     $031A   ; HANDLER TBL
+    40
+    41 				       ; IOCB'S * 8
+    42
+    43 = 0340			IOCB    =     $0340   ; IOCB BASE
+    44 = 0340			ICHID   =     IOCB    ; ID
+    45 = 0341			ICDNO   =     IOCB+1  ; UNIT #
+    46 = 0342			ICCOM   =     IOCB+2  ; COMMAND
+    47 = 0343			ICSTA   =     IOCB+3  ; STATUS
+    48 = 0344			ICBAL   =     IOCB+4  ; BUF ADR LOW
+    49 = 0345			ICBAH   =     IOCB+5  ; BUF ADR HIGH
+    50 = 0346			ICPTL   =     IOCB+6  ; PUT ADDR L
+    51 = 0347			ICPTH   =     IOCB+7  ; PUT ADDR H
+    52 = 0348			ICBLL   =     IOCB+8  ; BUF LEN LOW
+    53 = 0349			ICBLH   =     IOCB+9  ; BUF LEN HIGH
+    54 = 034A			ICAX1   =     IOCB+10 ; AUX 1
+    55 = 034B			ICAX2   =     IOCB+11 ; AUX 2
+    56 = 034C			ICAX3   =     IOCB+12 ; AUX 3
+    57 = 034D			ICAX4   =     IOCB+13 ; AUX 4
+    58 = 034E			ICAX5   =     IOCB+14 ; AUX 5
+    59 = 034F			ICAX6   =     IOCB+15 ; AUX 6
+    60
+    61 					;; Hardware Registers
+    62 = D01F			CONSOL	=	$D01F		; Console switches
+    63 					
+    64 				       ; OS ROM VECTORS
+    65
+    66 = E456			CIOV    =     $E456   ; CIO ENTRY
+    67 = E459			SIOV    =     $E459   ; SIO ENTRY
+    68 = E477			COLDST	=     $E477   ; COLD START
+    69 					
+    70 				       ; CONSTANTS
+    71
+    72 = 0005			GETREC	=	$05   ; CIO GET RECORD
+    73 = 0009			PUTREC  =	$09   ; CIO PUTREC
+    74 = 000B			PUTCHR	=	$0B   ; CIO PUTCHR
+    75
+    76 					;; Number of sectors to load
+    77
+    78 = 0004			SECLEN	=	(END-HDR)/128
+    79
+    80 					;; DeviceSlots/HostSlots lengths in bytes
+    81 					
+    82 = 0100			DSLEN	=	256
+    83 = 0130			HSLEN	=	304
+    84
+    85 					;; Entry sizes in bytes
+    86 = 0026			DSENT	=	38
+    87 = 0020			HSENT	=	32
+    88 					
+    89 					;; Code begin
+    90 					
+    91 					ORG	$06F0		; $0700 MEMLO - 16 byte ATR paragraph.
+    92 					OPT	h-		; No executable header, we provide our own.
+    93
+    94 				ATR:
+    95 06F0 96 02 80 16 80 00 + 	.BYTE $96,$02,$80,$16,$80,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00 ; Hack
+    96 0700			HDR:
+    97 0700 00 04 00 07 C0 E4		.BYTE $00,SECLEN,$00,$07,$C0,$E4
+    98
+    99 0706			START:
+   100 					;; Display Boot message
+   101 					
+   102 0706 A9 42			LDA	#<BOOT1
+   103 0708 85 80			STA	MSGL
+   104 070A A9 08			LDA	#>BOOT1
+   105 070C 85 81			STA	MSGH
+   106 070E 20 E6 07			JSR	DISPMSG
+   107
+   108 					;; Check for SELECT
+   109
+   110 0711 AD 1F D0			LDA	CONSOL
+   111 0714 C9 05			CMP	#$05
+   112 0716 D0 03			BNE	WWF
+   113 0718 4C 64 07			JMP	SELPR
+   114 					
+   115 					;; Wait for WIFI
+   116
+   117 071B 20 9A 07		WWF:	JSR	WTWF
+   118 					
+   119 					;; Display Mount All msg
+   120
+   121 071E A9 74			LDA	#<BOOTMT
+   122 0720 85 80			STA	MSGL
+   123 0722 A9 08			LDA	#>BOOTMT
+   124 0724 85 81			STA	MSGH
+   125 0726 20 E6 07			JSR	DISPMSG
+   126 					
+   127 					;; Send mount all command to #FujiNet
+   128 0729 A9 36			LDA	#<MATBL
+   129 072B A0 08			LDY	#>MATBL
+   130 072D 20 05 08			JSR	DOSIOV
+   131
+   132 					;; Check if ok, and change screen color if not.
+   133 0730 AD 03 03			LDA	DSTATS		; Get status of mount all
+   134 0733 10 1A			BPL	GDBOOT		; > 128 = ERROR
+   135
+   136 					;; Boot was bad.
+   137 					
+   138 0735 A9 44		MTERR:	LDA	#$44		; Error, change screen to red
+   139 0737 8D C6 02			STA	COLOR2
+   140 073A A9 A3			LDA	#<BOOTNO	; and display boot failed.
+   141 073C 85 80			STA	MSGL
+   142 073E A9 08			LDA	#>BOOTNO
+   143 0740 85 81			STA	MSGH
+   144 0742 20 E6 07			JSR	DISPMSG
+   145
+   146 					;; Issue boot mode change to config.
+   147 0745 A9 2A			LDA	#<BMTBL		; Point to set boot mode table
+   148 0747 A0 08			LDY	#>BMTBL
+   149 0749 20 05 08			JSR	DOSIOV		; Issue command.
+   150 074C 4C 5A 07			JMP	GOCOLD		; Go cold.
+   151
+   152 					;; Otherwise, Boot was good.
+   153 					
+   154 074F A9 8A		GDBOOT:	LDA	#<BOOTOK
+   155 0751 85 80			STA	MSGL
+   156 0753 A9 08			LDA	#>BOOTOK
+   157 0755 85 81			STA	MSGH
+   158 0757 20 E6 07			JSR	DISPMSG
+   159
+   160 					;; Count down, while checking for select.
+   161 					
+   162 075A 20 91 07		GOCOLD: JSR	RTCLR		; Clear RTCLOK
+   163 075D AD 1F D0		CLLP:	LDA	CONSOL		; Check console switches
+   164 0760 C9 05			CMP	#$05
+   165 0762 D0 22			BNE	CLLP2		; Continue with loop
+   166
+   167 					;; SELECT pressed, display message, set boot config mode, go cold.
+   168
+   169 0764 A5 82		SELPR:	LDA	SEL		; Check select
+   170 0766 30 1E			BMI	CLLP2		; If already pressed, we continue loop
+   171 0768 A9 B4			LDA	#$B4		; Select just pressed, turn Green
+   172 076A 8D C6 02			STA	COLOR2		; Background
+   173 076D A9 C3			LDA	#<BOOTSL	; Set up select pressed msg
+   174 076F 85 80			STA	MSGL		
+   175 0771 A9 08			LDA	#>BOOTSL
+   176 0773 85 81			STA	MSGH
+   177 0775 20 E6 07			JSR	DISPMSG		; Display it
+   178 0778 A9 FF			LDA	#$FF		; Indicate we've displayed msg
+   179 077A 85 82			STA	SEL		; so it's not displayed again.
+   180 					
+   181 077C A9 2A			LDA	#<BMTBL		; set up set boot mode command
+   182 077E A0 08			LDY	#>BMTBL
+   183 0780 20 05 08			JSR	DOSIOV
+   184 0783 4C 8E 07			JMP	BYE		; Immediately jump to bye.
+   185
+   186 					;; Otherwise continue on loop.
+   187 					
+   188 0786 A6 14		CLLP2:	LDX	RTCLOK2		; Read hi byte of clock
+   189 0788 E0 3F			CPX	#$3F		; Done?
+   190 078A B0 02			BCS	BYE		; Yup, bye
+   191 078C 90 CF			BCC	CLLP		; Nope
+   192 078E 4C 77 E4		BYE:	JMP	COLDST		; Cold boot.
+   193
+   194 				;;; Clear RTCLOK
+   195 0791 A9 00		RTCLR:	LDA	#$00		; Clear clock
+   196 0793 85 12			STA	RTCLOK0
+   197 0795 85 13			STA	RTCLOK1
+   198 0797 85 14			STA	RTCLOK2
+   199 0799 60				RTS
+   200 					
+   201 				;;; Wait for WIFI
+   202
+   203 					;; Display waiting msg
+   204 					
+   205 079A A9 00		WTWF:	LDA	#$00
+   206 079C 85 84			STA	WFTO		; Clear WIFI timeout counter.
+   207 079E A9 60			LDA	#<BOOTWF
+   208 07A0 85 80			STA	MSGL
+   209 07A2 A9 08			LDA	#>BOOTWF
+   210 07A4 85 81			STA	MSGH
+   211 07A6 20 E6 07			JSR	DISPMSG
+   212 07A9 20 91 07			JSR	RTCLR		; Clear RTCLOK
+   213 					
+   214 					;; Go ahead and check for consol, and bypass if needed
+   215
+   216 07AC AD 1F D0			LDA	CONSOL
+   217 07AF C9 05			CMP	#$05
+   218 07B1 F0 B1			BEQ	SELPR
+   219
+   220 					;; Finally, get the wifi status.
+   221 					
+   222 07B3 A9 1E		GETWF:	LDA	#<WFTBL
+   223 07B5 A0 08			LDY	#>WFTBL
+   224 07B7 20 05 08			JSR	DOSIOV
+   225 07BA A5 83			LDA	WFST
+   226 07BC 0A				ASL
+   227 07BD 0A				ASL
+   228 07BE 0A				ASL
+   229 07BF 0A				ASL
+   230 07C0 8D C6 02			STA	COLOR2
+   231 07C3 C9 30			CMP	#$30		; Connected?
+   232 07C5 F0 1E			BEQ	WFDNE
+   233 07C7 C9 60			CMP	#$60		; Not connected yet?
+   234 07C9 F0 03			BEQ	WFWAI		; if so, wait.
+   235 07CB 4C 35 07		WFBAD:	JMP	MTERR		; Display bad and go to config
+   236 07CE AD 1F D0		WFWAI:	LDA	CONSOL		; Check console switches again
+   237 07D1 C9 05			CMP	#$05		; SELECT?
+   238 07D3 F0 8F			BEQ	SELPR		; Yes, go to select pressed.
+   239 07D5 A5 14			LDA	RTCLOK2		; Check clock
+   240 07D7 29 3F			AND	#$3F		; check after 64 ticks.
+   241 07D9 D0 F3			BNE	WFWAI		; Not yet, continue waiting.
+   242 07DB A5 84			LDA	WFTO		; Check Timeout counter
+   243 07DD C9 20			CMP	#$20		; 32 tries?
+   244 07DF F0 EA			BEQ	WFBAD		; Yes, bad, go to config
+   245 07E1 E6 84			INC	WFTO		; Otherwise increment timeout timer
+   246 07E3 F0 CE			BEQ	GETWF		; And continue waiting.	
+   247 07E5 60			WFDNE:	RTS
+   248 					
+   249 				;;; Display Message via E:
+   250 					
+   251 07E6			DISPMSG:
+   252 07E6 A2 00			LDX	#$00		; E: (IOCB #0)
+   253 07E8 A9 09			LDA	#PUTREC		; PUT Record
+   254 07EA 9D 42 03			STA	ICCOM,X		
+   255 07ED A5 80			LDA	MSGL
+   256 07EF 9D 44 03			STA	ICBAL,X
+   257 07F2 A5 81			LDA	MSGH
+   258 07F4 9D 45 03			STA	ICBAH,X
+   259 07F7 A9 7F			LDA	#$7F		; 128 bytes max
+   260 07F9 9D 48 03			STA	ICBLL,X
+   261 07FC A9 00			LDA	#$00
+   262 07FE 9D 49 03			STA	ICBLH,X
+   263 0801 20 56 E4			JSR	CIOV
+   264 0804 60				RTS
+   265 					
+   266 				;;; COPY TABLE TO DCB AND DO SIO CALL ;;;;;;;;;;;
+   267
+   268 0805 8D 0E 08		DOSIOV: STA	DODCBL+1	; Set source address
+   269 0808 8C 0F 08			STY	DODCBL+2
+   270 080B A0 0C			LDY	#$0C		; 12 bytes
+   271 080D B9 FF FF		DODCBL	LDA	$FFFF,Y		; Changed above.
+   272 0810 99 00 03			STA	DCB,Y		; To DCB table
+   273 0813 88				DEY			; Count down
+   274 0814 10 F7			BPL	DODCBL		; Until done
+   275
+   276 0816			SIOVDST:	
+   277 0816 20 59 E4			JSR	SIOV		; Call SIOV
+   278 0819 AC 03 03			LDY	DSTATS		; Get STATUS in Y
+   279 081C 98				TYA			; Copy it into A	
+   280 081D 60				RTS			; Done
+   281
+   282 				;;; DCB table for wifi status
+   283
+   284 081E			WFTBL:
+   285 081E 70				.BYTE $70		; DDEVIC = $70 (Fuji)
+   286 081F 01				.BYTE $01		; DUNIT = 1
+   287 0820 FA				.BYTE $FA		; DCOMND = Get WIFI status
+   288 0821 40				.BYTE $40		; DSTATS = -> ATARI
+   289 0822 83 00			.WORD WFST 		; DBUF = WFST
+   290 0824 0F				.BYTE $0F		; DTIMLO = 15 seconds.
+   291 0825 00				.BYTE $00		; DRESVD = $00
+   292 0826 01 00			.WORD 1			; one byte
+   293 0828 00 00			.WORD $00		; DAUX = 0	
+   294 					
+   295 				;;; DCB table for set boot mode
+   296
+   297 082A			BMTBL:
+   298 082A 70				.BYTE $70		; DDEVIC = $70 (Fuji)
+   299 082B 01				.BYTE $01		; DUNIT = 1
+   300 082C D6				.BYTE $D6		; DCOMND = Mount all
+   301 082D 00				.BYTE $00		; DSTATS = None
+   302 082E 00 00			.WORD 0 		; DBUF = Put buffer at end of memory
+   303 0830 0F				.BYTE $0F		; DTIMLO = 15 seconds.
+   304 0831 00				.BYTE $00		; DRESVD = $00
+   305 0832 00 00			.WORD 0			; DBYT
+   306 0834 00 00			.WORD $00		; DAUX = 0 = Boot into CONFIG	
+   307 					
+   308 				;;; DCB table for Read Host Slots
+   309
+   310 0836			MATBL:
+   311 0836 70				.BYTE $70		; DDEVIC = $70 (Fuji)
+   312 0837 01				.BYTE $01		; DUNIT = 1
+   313 0838 D7				.BYTE $D7		; DCOMND = Mount all
+   314 0839 00				.BYTE $00		; DSTATS = None
+   315 083A 00 00			.WORD 0 		; DBUF = Put buffer at end of memory
+   316 083C FE				.BYTE $FE		; DTIMLO = 4 min 15 seconds.
+   317 083D 00				.BYTE $00		; DRESVD = $00
+   318 083E 00 00			.WORD 0			; DBYT
+   319 0840 00 00		PREPAD:	.WORD $00		; DAUX = 0
+   320
+   321 0842 50 52 45 53 53 20	BOOT1:	.BY "PRESS "
+   322 0848 A0 D3 C5 CC C5 C3 + 	.BY +$80 " SELECT "
+   323 0850 20 54 4F 20 42 4F + 	.BY " TO BOOT CONFIG",$9B
+   324 0860 57 41 49 54 49 4E + BOOTWF:	.BY "WAITING FOR WIFI...",$9B
+   325 0874 4D 4F 55 4E 54 49 + BOOTMT:	.BY "MOUNTING ALL SLOTS...",$9B
+   326 088A 4F 4B 2E 20 42 4F + BOOTOK:	.BY "OK. BOOTING in 1 SECOND.",$9B
+   327 08A3 4D 4F 55 4E 54 20 + BOOTNO:	.BY "MOUNT FAILED. BOOTING CONFIG...",$9B
+   328 08C3 A0 D3 C5 CC C5 C3 + BOOTSL:	.BY +$80 " SELECT "
+   329 08CB 20 50 52 45 53 53 + 	.BY " PRESSED, BOOTING CONFIG...",$9B
+   330 					
+   331 					.PRINT "Code Size Before Padding: ",PREPAD-START
+   331 				Code Size Before Padding: $013A
+   332 					
+   333 08E7 00 00 00 00 00 00 + 	.BYTE	$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00 ; For padding calc below.
+   334 					
+   335 08F7 00 00 00 00 00 00 + 	.ALIGN	$80,$00		; 128 byte align for sectors.
+   336
+   337 0900			END:	
+   338 					.PRINT "HDR: ",HDR
+   338 				HDR: $0700
+   339 					.PRINT "END: ",END
+   339 				END: $0900
+   340 					.PRINT "Number of Sectors: ",SECLEN
+   340 				Number of Sectors: $0004
+   341 					

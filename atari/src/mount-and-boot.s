@@ -105,9 +105,16 @@ START:
 	STA	MSGH
 	JSR	DISPMSG
 
+	;; Check for SELECT
+
+	LDA	CONSOL
+	CMP	#$05
+	BNE	WWF
+	JMP	SELPR
+	
 	;; Wait for WIFI
 
-	JSR	WTWF
+WWF:	JSR	WTWF
 	
 	;; Display Mount All msg
 
@@ -174,11 +181,12 @@ SELPR:	LDA	SEL		; Check select
 	LDA	#<BMTBL		; set up set boot mode command
 	LDY	#>BMTBL
 	JSR	DOSIOV
+	JMP	BYE		; Immediately jump to bye.
 
 	;; Otherwise continue on loop.
 	
 CLLP2:	LDX	RTCLOK2		; Read hi byte of clock
-	CPX	#$FE		; Done?
+	CPX	#$3F		; Done?
 	BCS	BYE		; Yup, bye
 	BCC	CLLP		; Nope
 BYE:	JMP	COLDST		; Cold boot.
@@ -315,8 +323,8 @@ BOOT1:	.BY "PRESS "
 	.BY " TO BOOT CONFIG",$9B
 BOOTWF:	.BY "WAITING FOR WIFI...",$9B
 BOOTMT:	.BY "MOUNTING ALL SLOTS...",$9B
-BOOTOK:	.BY "OK. BOOTING in 4 SECONDS",$9B
-BOOTNO:	.BY "BOOT FAILED. BOOTING CONFIG...",$9B
+BOOTOK:	.BY "OK. BOOTING in 1 SECOND.",$9B
+BOOTNO:	.BY "MOUNT FAILED. BOOTING CONFIG...",$9B
 BOOTSL:	.BY +$80 " SELECT "
 	.BY " PRESSED, BOOTING CONFIG...",$9B
 	
