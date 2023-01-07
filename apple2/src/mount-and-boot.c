@@ -17,7 +17,7 @@
 
 #define BOOT_MODE_CONFIG      0x00
 
-unsigned long timer = 32768;
+unsigned long timer = 32768UL;
 unsigned char fuji;
 
 void boot(void)
