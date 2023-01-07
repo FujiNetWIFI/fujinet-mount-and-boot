@@ -12,10 +12,13 @@
 #include <peekpoke.h>
 #include "sp.h"
 
-#define FUJICMD_SET_BOOT_MODE 0xD6
-#define FUJICMD_MOUNT_ALL     0xD7
+#define FUJICMD_GET_WIFISTATUS 0xFA
+#define FUJICMD_SET_BOOT_MODE  0xD6
+#define FUJICMD_MOUNT_ALL      0xD7
 
-#define BOOT_MODE_CONFIG      0x00
+#define BOOT_MODE_CONFIG       0x00
+
+#define WIFI_CONNECTED         0x03
 
 unsigned long timer = 32768UL;
 unsigned char fuji;
@@ -50,6 +53,16 @@ void boot(void)
     asm("JMP $0100");
   }
 
+}
+
+unsigned char wifi_status(void)
+{
+  // sp_error is in sp.h
+  sp_error = sp_status(sp_dest, FUJICMD_GET_WIFISTATUS);
+  if (sp_error)
+      return 0;
+ 
+  return sp_payload[0];
 }
 
 void mount_all(void)
@@ -92,14 +105,22 @@ void main(void)
 
   sp_init();
   fuji = sp_find_fuji();
+
+  if (wifi_status() != WIFI_CONNECTED) // WIFI not connected.
+    {
+      cputs("WIFI NOT CONNECTED.\r\nBOOTING CONFIG...\r\n");
+      mount_config();
+    }
+  else                                 // WIFI connected
+    {    
+      cputs("PRESS ANY KEY TO GO TO CONFIG\r\n");
+      cputs("OR WAIT TO MOUNT AND BOOT...\r\n");
+      
+      if (waitkey())
+	mount_config();
+      else
+	mount_all();
+    }
   
-  cputs("PRESS ANY KEY TO GO TO CONFIG\r\n");
-  cputs("OR WAIT TO MOUNT AND BOOT...");
-
-  if (waitkey())
-    mount_config();
-  else
-    mount_all();
-
   boot();
 }
